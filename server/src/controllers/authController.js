@@ -46,9 +46,17 @@ export async function login(req, res, next) {
   } catch (err) { next(err); }
 }
 
-export async function me(req, res) {
-  const user = await User.findById(req.user.id).lean();
-  res.json({ user: user && publicUser(user) });
+export async function me(req, res, next) {
+  try {
+    if (!req.user?.id) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+    
+    const user = await User.findById(req.user.id).lean();
+    res.json({ user: user && publicUser(user) });
+  } catch (err) {
+    next(err);
+  }
 }
 
 function signToken(user) {

@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import mongoose from 'mongoose';
 import { Perk } from '../models/Perk.js';
 
 // validation schema for creating/updating a perk
@@ -13,7 +14,7 @@ const perkSchema = Joi.object({
   discountPercent: Joi.number().min(0).max(100).default(0),
   // merchant is optional
   merchant: Joi.string().allow(''),
-  ccreatedBy: Joi.forbidden(),
+  createdBy: Joi.forbidden(),
 
 }); 
 
@@ -24,9 +25,10 @@ export async function filterPerks(req, res, next) {
   try {
     const { title } = req.query     ;
     if (title) {
-      const perks = await Perk.find ({ title: title}).sort({ createdAt: -1 });
+      const perks = await Perk.find({ title: title }).sort({ createdAt: -1 }).lean();
       console.log(perks);
-      res.status(200).json(perks)
+      // return in same shape as other endpoints
+      res.status(200).json({ perks });
     }
     else {
       res.status(400).json({ message: 'Title query parameter is required' });
@@ -69,6 +71,10 @@ export async function getAllPerksPublic(req, res, next) {
       query.merchant = merchant.trim();
     }
     
+    // Also filter to only include perks with valid ObjectId createdBy references
+    // This prevents CastError when populating
+    query.createdBy = { $exists: true, $type: 'objectId' };
+    
     // Fetch perks with the built query, populate creator info, and sort by newest first
     const perks = await Perk
       .find(query)
@@ -85,6 +91,11 @@ export async function getAllPerksPublic(req, res, next) {
 // Get a single perk by ID 
 export async function getPerk(req, res, next) {
   try {
+    // Validate MongoDB ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid perk id' });
+    }
+    
     const perk = await Perk.findById(req.params.id);
     console.log(perk);
     if (!perk) return res.status(404).json({ message: 'Perk not found' });
@@ -96,11 +107,16 @@ export async function getPerk(req, res, next) {
 // Create a new perk
 export async function createPerk(req, res, next) {
   try {
-    // validate request body against schema\
+    // Ensure user is authenticated
+    if (!req.user?.id) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+    
+    // validate request body against schema
     const { value, error } = perkSchema.validate(req.body);
     if (error) return res.status(400).json({ message: error.message });
     // ...value spreads the validated fields
-    const doc = await Perk.create({ ...value,createdBy: req.user.id});
+    const doc = await Perk.create({ ...value, createdBy: req.user.id });
     res.status(201).json({ perk: doc });
   } catch (err) {
     if (err.code === 11000) return res.status(409).json({ message: 'Duplicate perk for this merchant' });
@@ -111,13 +127,21 @@ export async function createPerk(req, res, next) {
 // Update an existing perk by ID and validate only the fields that are being updated (might be the task)
 export async function updatePerk(req, res, next) {
   try {
+    // Validate MongoDB ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid perk id' });
+    }
 
     // i want to validate only the fields that are being updated  ? shall i find the existing perk first and then merge the updates with it before validating ?
     // find the existing perk first and then merge the updates with it before validating
-    const existingPerk = await Perk.findById(req.params.id,);
+    const existingPerk = await Perk.findById(req.params.id);
     if (!existingPerk) return res.status(404).json({ message: 'Perk not found' });
     // merge existing perk with updates
     const updatedData = { ...existingPerk.toObject(), ...req.body };
+    
+    // Remove createdBy from validation since Joi schema marks it as forbidden
+    delete updatedData.createdBy;
+    
     const { value, error } = perkSchema.validate(updatedData, { abortEarly: false, stripUnknown: true, convert: true });
 
     // const { value, error } = perkSchema.validate(req.body , {abortEarly:false, stripUnknown:true, convert:true });
@@ -131,6 +155,11 @@ export async function updatePerk(req, res, next) {
 // Delete a perk by ID
 export async function deletePerk(req, res, next) {
   try {
+    // Validate MongoDB ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid perk id' });
+    }
+    
     const doc = await Perk.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ message: 'Perk not found' });
     res.json({ ok: true });
